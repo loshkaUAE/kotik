@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kotik Trading Terminal</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0b1020; color: #dce3f0; }
+    .grid { display:grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+    .card { background:#141b32; border-radius:10px; padding:12px; }
+    #chart { height: 560px; }
+    .metric { margin: 6px 0; }
+  </style>
+</head>
+<body>
+  <h2>Kotik — Bybit Smart Money Terminal</h2>
+  <div class="grid">
+    <div class="card"><div id="chart"></div></div>
+    <div class="card">
+      <h3>Active Setup</h3>
+      <div id="setup"></div>
+      <h3>Liquidity</h3>
+      <div id="liq"></div>
+    </div>
+  </div>
+<script>
+const ws = new WebSocket(`ws://${location.host}/api/ws/live`);
+ws.onmessage = (evt) => {
+  const packet = JSON.parse(evt.data);
+  const symbol = Object.keys(packet.symbols)[0];
+  const data = packet.symbols[symbol];
+  const rows = data.indicators || [];
+  if (!rows.length) return;
+  const x = rows.map((_,i)=>i);
+  const cand = {
+    x,
+    open: rows.map(r=>r.open), high: rows.map(r=>r.high), low: rows.map(r=>r.low), close: rows.map(r=>r.close),
+    type:'candlestick', name:'price'
+  };
+  const ema21 = {x, y: rows.map(r=>r.ema_21), type:'scatter', mode:'lines', name:'EMA21'};
+  const vwap = {x, y: rows.map(r=>r.vwap), type:'scatter', mode:'lines', name:'VWAP'};
+  Plotly.newPlot('chart', [cand, ema21, vwap], {paper_bgcolor:'#141b32', plot_bgcolor:'#141b32', font:{color:'#dce3f0'}});
+
+  const setup = data.signal;
+  document.getElementById('setup').innerHTML = setup ?
+    `<div class='metric'><b>${setup.side.toUpperCase()}</b> prob=${(setup.probability*100).toFixed(1)}%</div>
+     <div class='metric'>Entry ${setup.entry.toFixed(2)}</div>
+     <div class='metric'>SL ${setup.stop_loss.toFixed(2)}</div>
+     <div class='metric'>TP1 ${setup.tp1.toFixed(2)} TP2 ${setup.tp2.toFixed(2)} TP3 ${setup.tp3.toFixed(2)}</div>
+     <div class='metric'>Lev ${setup.leverage.toFixed(1)}x Liq ${setup.liquidation_price.toFixed(2)}</div>` :
+    '<div>No valid setup</div>';
+
+  const liq = data.liquidity;
+  document.getElementById('liq').innerHTML = `
+    <div class='metric'>OFI: ${(liq.order_flow_imbalance||0).toFixed(3)}</div>
+    <div class='metric'>Absorption: ${(liq.absorption_score||0).toFixed(3)}</div>
+    <div class='metric'>Iceberg: ${(liq.iceberg_score||0).toFixed(3)}</div>
+    <div class='metric'>FVG: ${(liq.fvg_zones||[]).length} / Stop hunts: ${(liq.stop_hunts||[]).length}</div>`;
+};
+</script>
+</body>
+</html>
