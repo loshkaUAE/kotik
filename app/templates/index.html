@@ -2,61 +2,104 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Kotik Trading Terminal</title>
+  <title>Kotik Terminal</title>
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; background: #0b1020; color: #dce3f0; }
-    .grid { display:grid; grid-template-columns: 2fr 1fr; gap: 12px; }
-    .card { background:#141b32; border-radius:10px; padding:12px; }
-    #chart { height: 560px; }
-    .metric { margin: 6px 0; }
+    body{background:#0e1324;color:#dce2f5;font-family:Inter,Arial,sans-serif;padding:12px}
+    .row{display:grid;grid-template-columns:2.6fr 1fr;gap:12px}
+    .card{background:#151d36;border-radius:10px;padding:12px}
+    #chart{height:620px}
+    label,select,input,button{font-size:14px}
+    button{padding:6px 10px}
   </style>
 </head>
 <body>
-  <h2>Kotik — Bybit Smart Money Terminal</h2>
-  <div class="grid">
+  <h2>Kotik — Standalone Bybit Analytics Dashboard (No Telegram)</h2>
+  <div class="card" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <label>Symbol</label><select id="symbol"><option>BTCUSDT</option><option>ETHUSDT</option></select>
+    <label>Timeframe</label><select id="tf"><option value="1">1m</option><option value="5">5m</option><option value="15">15m</option><option value="60">1h</option></select>
+    <button onclick="connect()">Apply</button>
+    <label>Entry</label><input id="entry" type="number" step="0.01" />
+    <label>Balance</label><input id="balance" type="number" value="10000" step="1" />
+    <label>Risk %</label><input id="risk" type="number" value="0.01" step="0.001" />
+    <button onclick="recommend()">Get SL/TP Recommendation</button>
+  </div>
+  <div class="row">
     <div class="card"><div id="chart"></div></div>
     <div class="card">
-      <h3>Active Setup</h3>
-      <div id="setup"></div>
-      <h3>Liquidity</h3>
-      <div id="liq"></div>
+      <h3>Signal</h3><div id="signal"></div>
+      <h3>Liquidity & Orderbook</h3><div id="liq"></div>
+      <h3>Recommendation</h3><div id="rec"></div>
     </div>
   </div>
 <script>
-const ws = new WebSocket(`ws://${location.host}/api/ws/live`);
-ws.onmessage = (evt) => {
-  const packet = JSON.parse(evt.data);
-  const symbol = Object.keys(packet.symbols)[0];
-  const data = packet.symbols[symbol];
-  const rows = data.indicators || [];
-  if (!rows.length) return;
-  const x = rows.map((_,i)=>i);
-  const cand = {
-    x,
-    open: rows.map(r=>r.open), high: rows.map(r=>r.high), low: rows.map(r=>r.low), close: rows.map(r=>r.close),
-    type:'candlestick', name:'price'
+let ws;
+let currentSymbol='BTCUSDT';
+let currentTf='1';
+function connect(){
+  currentSymbol=document.getElementById('symbol').value;
+  currentTf=document.getElementById('tf').value;
+  if(ws) ws.close();
+  ws=new WebSocket(`ws://${location.host}/api/ws/live?symbol=${currentSymbol}&timeframe=${currentTf}`);
+  ws.onmessage=(e)=>render(JSON.parse(e.data));
+}
+
+function patternText(row){
+  const p=[];
+  if(row.doji) p.push('Doji');
+  if(row.hammer) p.push('Hammer');
+  if(row.bullish_engulfing) p.push('Bullish Engulfing');
+  if(row.bearish_engulfing) p.push('Bearish Engulfing');
+  return p.join(', ') || 'None';
+}
+
+function render(packet){
+  const rows=packet.indicators || [];
+  if(!rows.length) return;
+  const x=rows.map((_,i)=>i);
+  const last=rows[rows.length-1];
+  document.getElementById('entry').value=last.close;
+  const traces=[
+    {x,open:rows.map(r=>r.open),high:rows.map(r=>r.high),low:rows.map(r=>r.low),close:rows.map(r=>r.close),type:'candlestick',name:'Price'},
+    {x,y:rows.map(r=>r.ema_21),type:'scatter',mode:'lines',name:'EMA21'},
+    {x,y:rows.map(r=>r.sma_20),type:'scatter',mode:'lines',name:'SMA20'},
+    {x,y:rows.map(r=>r.vwap),type:'scatter',mode:'lines',name:'VWAP'},
+    {x,y:rows.map(r=>r.bb_up),type:'scatter',mode:'lines',name:'BB Up',line:{dash:'dot'}},
+    {x,y:rows.map(r=>r.bb_low),type:'scatter',mode:'lines',name:'BB Low',line:{dash:'dot'}}
+  ];
+  const sig=packet.signal;
+  if(sig){
+    const ix=rows.length-1;
+    traces.push({x:[ix],y:[sig.entry],type:'scatter',mode:'markers+text',text:['↑ Long'],textposition:'top center',marker:{size:12,color:'lime'},name:'Signal'});
+  }
+  Plotly.newPlot('chart', traces, {paper_bgcolor:'#151d36',plot_bgcolor:'#151d36',font:{color:'#dce2f5'}});
+
+  document.getElementById('signal').innerHTML = sig ?
+    `Prob: ${(sig.probability*100).toFixed(1)}%<br>Entry: ${sig.entry.toFixed(2)}<br>SL: ${sig.stop_loss.toFixed(2)}<br>TP1/2/3: ${sig.tp1.toFixed(2)} / ${sig.tp2.toFixed(2)} / ${sig.tp3.toFixed(2)}<br>RR: ${sig.rr.toFixed(2)}<br><b>Why:</b><br>${sig.explanation.join('<br>')}` : 'No 90%+ setup';
+
+  const liq=packet.liquidity || {};
+  const ob=packet.orderbook || {};
+  document.getElementById('liq').innerHTML =
+    `OFI: ${(liq.order_flow_imbalance||0).toFixed(3)}<br>Delta div: ${(liq.delta_divergence||0).toFixed(2)}<br>`+
+    `Buy pools: ${(liq.buy_side_pools||[]).slice(0,3).join(', ')}<br>Sell pools: ${(liq.sell_side_pools||[]).slice(0,3).join(', ')}<br>`+
+    `FVG: ${(liq.fvg_zones||[]).length}, Stop-hunts: ${(liq.stop_hunts||[]).length}<br>`+
+    `Top bids: ${(ob.b||[]).slice(0,3).map(x=>x.join('@')).join(' | ')}<br>Top asks: ${(ob.a||[]).slice(0,3).map(x=>x.join('@')).join(' | ')}<br>`+
+    `Pattern: ${patternText(last)}`;
+}
+
+async function recommend(){
+  const payload={
+    symbol:currentSymbol,timeframe:currentTf,
+    entry:Number(document.getElementById('entry').value),
+    balance:Number(document.getElementById('balance').value),
+    risk_pct:Number(document.getElementById('risk').value)
   };
-  const ema21 = {x, y: rows.map(r=>r.ema_21), type:'scatter', mode:'lines', name:'EMA21'};
-  const vwap = {x, y: rows.map(r=>r.vwap), type:'scatter', mode:'lines', name:'VWAP'};
-  Plotly.newPlot('chart', [cand, ema21, vwap], {paper_bgcolor:'#141b32', plot_bgcolor:'#141b32', font:{color:'#dce3f0'}});
-
-  const setup = data.signal;
-  document.getElementById('setup').innerHTML = setup ?
-    `<div class='metric'><b>${setup.side.toUpperCase()}</b> prob=${(setup.probability*100).toFixed(1)}%</div>
-     <div class='metric'>Entry ${setup.entry.toFixed(2)}</div>
-     <div class='metric'>SL ${setup.stop_loss.toFixed(2)}</div>
-     <div class='metric'>TP1 ${setup.tp1.toFixed(2)} TP2 ${setup.tp2.toFixed(2)} TP3 ${setup.tp3.toFixed(2)}</div>
-     <div class='metric'>Lev ${setup.leverage.toFixed(1)}x Liq ${setup.liquidation_price.toFixed(2)}</div>` :
-    '<div>No valid setup</div>';
-
-  const liq = data.liquidity;
-  document.getElementById('liq').innerHTML = `
-    <div class='metric'>OFI: ${(liq.order_flow_imbalance||0).toFixed(3)}</div>
-    <div class='metric'>Absorption: ${(liq.absorption_score||0).toFixed(3)}</div>
-    <div class='metric'>Iceberg: ${(liq.iceberg_score||0).toFixed(3)}</div>
-    <div class='metric'>FVG: ${(liq.fvg_zones||[]).length} / Stop hunts: ${(liq.stop_hunts||[]).length}</div>`;
-};
+  const resp=await fetch('/api/recommendation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const r=await resp.json();
+  if(r.error){document.getElementById('rec').innerHTML=r.error;return;}
+  document.getElementById('rec').innerHTML=`SL: ${r.recommended_stop_loss.toFixed(2)}<br>TP1: ${r.recommended_tp1.toFixed(2)}<br>TP2: ${r.recommended_tp2.toFixed(2)}<br>TP3: ${r.recommended_tp3.toFixed(2)}<br>RR: ${r.risk_reward.toFixed(2)}<br>Probability: ${(r.probability_score*100).toFixed(1)}%`;
+}
+connect();
 </script>
 </body>
 </html>
