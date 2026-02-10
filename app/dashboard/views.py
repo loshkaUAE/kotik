@@ -7,8 +7,14 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 router = APIRouter()
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent / 'templates'
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def _templates_dir() -> Path:
+    # Stable absolute path regardless of current working directory.
+    return Path(__file__).resolve().parent.parent / 'templates'
+
+
+templates = Jinja2Templates(directory=str(_templates_dir()))
 
 
 @router.get('/', response_class=HTMLResponse)
